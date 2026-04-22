@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Eco-Sense Cloud Dashboard</title>
+    <style>
+      body {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background-color: #f4f7f6;
+        color: #333;
+        text-align: center;
+        padding: 50px;
+      }
+      .container {
+        max-width: 800px;
+        margin: 0 auto;
+        background: white;
+        padding: 30px;
+        border-radius: 12px;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+      }
+      h1 {
+        color: #2c3e50;
+      }
+      .grid-container {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 20px;
+        margin-top: 30px;
+      }
+      .metric-box {
+        padding: 20px;
+        background: #e0f7fa;
+        border-radius: 8px;
+      }
+      .metric-value {
+        font-size: 42px;
+        font-weight: bold;
+        color: #00796b;
+        margin-top: 10px;
+      }
+      .status-badge {
+        display: inline-block;
+        margin-top: 20px;
+        padding: 10px 20px;
+        border-radius: 5px;
+        font-weight: bold;
+        font-size: 20px;
+        background-color: #bdc3c7;
+      }
+      /* The Warning Banner (Hidden by default) */
+      #warningBanner {
+        display: none;
+        background-color: #e74c3c;
+        color: white;
+        padding: 20px;
+        margin-top: 30px;
+        border-radius: 8px;
+        font-size: 22px;
+        font-weight: bold;
+        animation: pulse 1.5s infinite;
+      }
+      @keyframes pulse {
+        0% {
+          transform: scale(1);
+        }
+        50% {
+          transform: scale(1.02);
+        }
+        100% {
+          transform: scale(1);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Eco-Sense Live Dashboard</h1>
+      <p>CEP-105 Energy Monitor</p>
+
+      <div id="roomStatusBadge" class="status-badge">Loading Status...</div>
+
+      <div class="grid-container">
+        <div class="metric-box">
+          <div>Current Count</div>
+          <div class="metric-value" id="roomCount">--</div>
+        </div>
+
+        <div class="metric-box">
+          <div>Light Status</div>
+          <div class="metric-value" id="lightStatus">--</div>
+        </div>
+
+        <div class="metric-box">
+          <div>Movement Zone</div>
+          <div class="metric-value" id="movementStatus">--</div>
+        </div>
+      </div>
+
+      <div id="warningBanner">⚠️ WARNING: Room vacant.</div>
+    </div>
+
+    <script>
+      // --- 1. Database Configuration ---
+      const BASE_URL =
+        "https://iotproject-62361-default-rtdb.asia-southeast1.firebasedatabase.app";
+
+      // Use Firebase query parameters to ONLY grab the 1 newest record. Saves massive bandwidth!
+      const SENSOR_URL = `${BASE_URL}/sensor_data.json?orderBy="$key"&limitToLast=1`;
+      const WARNING_URL = `${BASE_URL}/warnings.json?orderBy="$key"&limitToLast=1`;
+
+      // --- 2. The Fetch Function ---
+      async function fetchDashboardData() {
+        try {
+          // Fetch both the normal data and the warnings at the same time
+          const [sensorRes, warningRes] = await Promise.all([
+            fetch(SENSOR_URL),
+            fetch(WARNING_URL),
+          ]);
+
+          const sensorRaw = await sensorRes.json();
+          const warningRaw = await warningRes.json();
+
+          let currentCount = 0;
+          let sensorTimestamp = 0;
+
+          // --- PROCESS SENSOR DATA ---
+          if (sensorRaw) {
+            const latestSensorKey = Object.keys(sensorRaw)[0];
+            const data = sensorRaw[latestSensorKey];
+
+            currentCount = data.Count !== undefined ? parseInt(data.Count) : 0;
+            sensorTimestamp = data.timestamp || 0;
+            const lightStatus = data.Light_Status == 1 ? "ON" : "OFF";
+            const movement = data.Movement || "--";
+
+            // Update UI
+            document.getElementById("roomCount").innerText = currentCount;
+            document.getElementById("lightStatus").innerText = lightStatus;
+            document.getElementById("movementStatus").innerText =
+              movement === "E"
+                ? "Entering"
+                : movement === "L"
+                  ? "Leaving"
+                  : movement;
+
+            // Update Top Badge
+            const badge = document.getElementById("roomStatusBadge");
+            if (currentCount > 0) {
+              badge.innerText = "Room Occupied";
+              badge.style.backgroundColor = "#2ecc71"; // Green
+              badge.style.color = "white";
+            } else {
+              badge.innerText = "Room Vacant";
+              badge.style.backgroundColor = "#e74c3c"; // Red
+              badge.style.color = "white";
+            }
+          }
+
+          // --- PROCESS WARNING LOGIC ---
+          let showWarning = false;
+
+          // Only show a warning if the room is currently empty AND a warning exists
+          if (currentCount === 0 && warningRaw) {
+            const latestWarnKey = Object.keys(warningRaw)[0];
+            const warnData = warningRaw[latestWarnKey];
+
+            // Crucial Logic: If the warning's timestamp is NEWER than the last time
+            // someone left the room, it means Python triggered an active alarm.
+            if (warnData.timestamp >= sensorTimestamp) {
+              showWarning = true;
+              // Display the exact alert text that Python sent!
+              document.getElementById("warningBanner").innerText =
+                warnData.Alert;
+            }
+          }
+
+          // Turn the banner on or off
+          document.getElementById("warningBanner").style.display = showWarning
+            ? "block"
+            : "none";
+        } catch (error) {
+          console.error("Error fetching data from Firebase:", error);
+        }
+      }
+
+      // --- 3. Start the Polling ---
+      fetchDashboardData();
+      setInterval(fetchDashboardData, 1000); // Check every 1 second for snappy updates
+    </script>
+  </body>
+</html>
